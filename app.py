@@ -1,5 +1,7 @@
 import io
 import json
+import logging
+
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from pptx import Presentation
@@ -8,24 +10,41 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 app = Flask(__name__)
 CORS(app)
 
+logging.basicConfig(level=logging.INFO)
+
 
 def delete_slide(prs, index):
-    """Ασφαλής διαγραφή διαφάνειας από το Presentation χωρίς σφάλματα XML."""
+    """Αλεξίσφαιρη διαγραφή διαφάνειας που δεν κρασάρει τον server."""
     try:
-        rId = prs.slides._sldIdLst[index].rId
-        prs.part.drop_rel(rId)
-        del prs.slides._sldIdLst[index]
-    except Exception:
+        slide = prs.slides[index]
+
+        # 1. Βρίσκουμε το rId από τα relationships του Presentation
+        r_id = None
+        for rel_id, rel in list(prs.part.rels.items()):
+            if rel.target_part == slide.part:
+                r_id = rel_id
+                break
+
+        if r_id:
+            prs.part.drop_rel(r_id)
+
+        # 2. Αφαιρούμε τη διαφάνεια από τη λίστα
+        sld_id_lst = prs.slides._sldIdLst
         try:
-            # Fallback μέθοδος αν το _sldIdLst συμπεριφέρεται ως απλή λίστα
-            slide = prs.slides[index]
-            for rel in list(prs.part.rels.values()):
-                if rel.target_part == slide.part:
-                    prs.part.drop_rel(rel.rId)
-                    break
-            del prs.slides._sldIdLst[index]
-        except Exception as e:
-            print(f"Error deleting slide at index {index}: {e}")
+            del sld_id_lst[index]
+        except Exception:  # noqa: BLE001
+            if hasattr(sld_id_lst, "remove"):
+                sld_id_lst.remove(sld_id_lst[index])
+
+    except Exception as e:  # noqa: BLE001
+        logging.warning("Warning on slide deletion at index %s: %s", index, e)
+        # Fallback: Αν αποτύχει η διαγραφή του XML, καθαρίζουμε όλα τα κείμενα
+        try:
+            for shape in prs.slides[index].shapes:
+                if shape.has_text_frame:
+                    shape.text_frame.text = ""
+        except Exception:  # noqa: BLE001, S110
+            pass
 
 
 def get_best_content_layout(prs):
@@ -37,9 +56,15 @@ def get_best_content_layout(prs):
             for shape in slide.shapes:
                 if shape.is_placeholder:
                     ph_type = shape.placeholder_format.type
-                    if ph_type in [PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE]:
+                    if ph_type in [
+                        PP_PLACEHOLDER.TITLE,
+                        PP_PLACEHOLDER.CENTER_TITLE,
+                    ]:
                         has_title = True
-                    elif ph_type in [PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT]:
+                    elif ph_type in [
+                        PP_PLACEHOLDER.BODY,
+                        PP_PLACEHOLDER.OBJECT,
+                    ]:
                         has_body = True
             if has_title and has_body:
                 return slide.slide_layout
@@ -62,7 +87,7 @@ def get_best_content_layout(prs):
 
 
 def process_cover_slide(slide, deck_title, deck_subtitle=""):
-    """Ειδικός χειρισμός Cover Slide: Βάζει μόνο τίτλο & υπότιτλο και καθαρίζει τα υπόλοιπα."""
+    """Ειδικός χειρισμός Cover Slide: Βάζει μόνο τίτλο & υπότιτλο."""
     title_done = False
 
     for shape in slide.shapes:
@@ -117,7 +142,7 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
 
 
 def process_slide_text(slide, title_text, bullets):
-    """Εντοπίζει αυστηρά μόνο τον Τίτλο και το Κύριο Σώμα (Body) στις διαφάνειες περιεχομένου."""
+    """Εντοπίζει αυστηρά μόνο τον Τίτλο και το Κύριο Σώμα στις διαφάνειες."""
     title_shape = None
     body_shape = None
 
@@ -262,8 +287,8 @@ def inject_text():
             download_name="presentation_updated.pptx",
         )
 
-    except Exception as e:
-        print(f"Error processing PPTX: {str(e)}")
+    except Exception as e:  # noqa: BLE001
+        logging.error("Error processing PPTX: %s", e)
         return jsonify({"error": str(e)}), 500
 
 
