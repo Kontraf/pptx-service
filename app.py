@@ -13,38 +13,11 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 
-def delete_slide(prs, index):
-    """Αλεξίσφαιρη διαγραφή διαφάνειας που δεν κρασάρει τον server."""
-    try:
-        slide = prs.slides[index]
-
-        # 1. Βρίσκουμε το rId από τα relationships του Presentation
-        r_id = None
-        for rel_id, rel in list(prs.part.rels.items()):
-            if rel.target_part == slide.part:
-                r_id = rel_id
-                break
-
-        if r_id:
-            prs.part.drop_rel(r_id)
-
-        # 2. Αφαιρούμε τη διαφάνεια από τη λίστα
-        sld_id_lst = prs.slides._sldIdLst
-        try:
-            del sld_id_lst[index]
-        except Exception:  # noqa: BLE001
-            if hasattr(sld_id_lst, "remove"):
-                sld_id_lst.remove(sld_id_lst[index])
-
-    except Exception as e:  # noqa: BLE001
-        logging.warning("Warning on slide deletion at index %s: %s", index, e)
-        # Fallback: Αν αποτύχει η διαγραφή του XML, καθαρίζουμε όλα τα κείμενα
-        try:
-            for shape in prs.slides[index].shapes:
-                if shape.has_text_frame:
-                    shape.text_frame.text = ""
-        except Exception:  # noqa: BLE001, S110
-            pass
+def clear_slide_content(slide):
+    """Καθαρίζει όλα τα κείμενα από μια διαφάνεια χωρίς να πειράζει το XML layout."""
+    for shape in slide.shapes:
+        if shape.has_text_frame:
+            shape.text_frame.text = ""
 
 
 def get_best_content_layout(prs):
@@ -259,11 +232,11 @@ def inject_text():
                 slide_info.get("bullets", []),
             )
 
-        # 3. ΔΙΑΓΡΑΦΗ ΠΕΡΙΣΣΕΥΟΥΜΕΝΩΝ ΔΙΑΦΑΝΕΙΩΝ
+        # 3. ΑΝ ΠΕΡΙΣΣΕΥΟΥΝ ΔΙΑΦΑΝΕΙΕΣ, ΚΑΘΑΡΙΖΟΥΜΕ ΤΟ ΠΕΡΙΕΧΟΜΕΝΟ ΤΟΥΣ (ΧΩΡΙΣ DELETE)
         total_target_slides = len(slides_data) + 1
         if num_template_slides > total_target_slides:
-            for i in range(num_template_slides - 1, total_target_slides - 1, -1):
-                delete_slide(prs, i)
+            for i in range(total_target_slides, num_template_slides):
+                clear_slide_content(prs.slides[i])
 
         # 4. ΔΗΜΙΟΥΡΓΙΑ ΕΠΙΠΛΕΟΝ ΔΙΑΦΑΝΕΙΩΝ
         elif total_target_slides > num_template_slides:
