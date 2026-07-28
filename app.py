@@ -1,11 +1,7 @@
 import io
-
 import json
-
 from flask import Flask, jsonify, request, send_file
-
 from flask_cors import CORS
-
 from pptx import Presentation
 
 app = Flask(__name__)
@@ -43,22 +39,20 @@ def inject_text():
 
                 text_frame = shape.text_frame
 
-                # 1. ΑΝΤΙΚΑΤΑΣΤΑΣΗ ΤΙΤΛΟΥ (Διατήρηση Format)
+                # 1. Αντικατάσταση ΜΟΝΟ του κειμένου στον Τίτλο
                 if shape == slide.shapes.title or "title" in shape.name.lower():
                     if title_text and len(text_frame.paragraphs) > 0:
                         p = text_frame.paragraphs[0]
                         if len(p.runs) > 0:
                             p.runs[0].text = title_text
-                            # Διαγραφή τυχόν επιπλέον runs για να μην διπλοτυπωθεί
                             for r in p.runs[1:]:
                                 r.text = ""
                         else:
                             p.text = title_text
 
-                # 2. ΑΝΤΙΚΑΤΑΣΤΑΣΗ BULLETS (Διατήρηση Format / Χρωμάτων)
+                # 2. Αντικατάσταση ΜΟΝΟ του κειμένου στα Bullets
                 else:
                     if bullets:
-                        # Ενημερώνουμε τις υπάρχουσες παραγράφους για να κρατήσουν το χρώμα/font
                         for p_idx, paragraph in enumerate(text_frame.paragraphs):
                             if p_idx < len(bullets):
                                 if len(paragraph.runs) > 0:
@@ -68,10 +62,8 @@ def inject_text():
                                 else:
                                     paragraph.text = bullets[p_idx]
                             else:
-                                # Καθαρίζουμε τις περισσευούμενες παραγράφους
                                 paragraph.text = ""
 
-                        # Αν το AI έβγαλε περισσότερα bullets από όσα είχε το template
                         if len(bullets) > len(text_frame.paragraphs):
                             for b_idx in range(
                                 len(text_frame.paragraphs), len(bullets)
