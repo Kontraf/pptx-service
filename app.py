@@ -10,11 +10,17 @@ CORS(app)
 
 
 def delete_slide(prs, index):
-    """Διαγράφει μια διαφάνεια από το Presentation βάσει του index της."""
-    sld_id_lst = prs.slides._sldIdLst
-    rId = sld_id_lst[index].get("rId")
-    prs.part.drop_rel(rId)
-    del sld_id_lst[index]
+    """Ασφαλής διαγραφή διαφάνειας από το Presentation."""
+    try:
+        slide_id = prs.slides[index].slide_id
+        for element in prs.slides._sldIdLst:
+            if element.id == slide_id:
+                rId = element.rId
+                prs.part.drop_rel(rId)
+                prs.slides._sldIdLst.remove(element)
+                break
+    except Exception as e:
+        print(f"Error deleting slide at index {index}: {e}")
 
 
 def get_best_content_layout(prs):
