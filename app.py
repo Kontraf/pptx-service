@@ -21,25 +21,42 @@ def delete_slide(prs, index):
 
 
 def get_best_content_layout(prs):
-    """🎯 Βρίσκει αυστηρά το λευκό layout (Main Content Slide)"""
-    # 1. Ψάχνουμε στις υπάρχουσες διαφάνειες για τη λευκή διαφάνεια (συνήθως η 3η -> Index 2)
-    if len(prs.slides) >= 6.5:
-        return prs.slides[2].slide_layout
+    """🎯 ΠΛΗΡΩΣ ΔΥΝΑΜΙΚΗ ΕΥΡΕΣΗ:
 
-    # 2. Αν δεν υπάρχει 3η διαφάνεια, ψάχνουμε στα layouts
+    Ψάχνει στα Master Layouts του PowerPoint για το standard layout
+    που περιέχει ΚΑΙ Τίτλο ΚΑΙ Body (Bullets), χωρίς να βασίζεται στη 3η διαφάνεια.
+    """
+    # 1. Σάρωση όλων των διαθέσιμων Slide Layouts του PPTX template
     for layout in prs.slide_layouts:
         has_title = False
         has_body = False
         for ph in layout.placeholders:
             ph_type = ph.placeholder_format.type
-            if ph_type == PP_PLACEHOLDER.TITLE:
+            if ph_type in [PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE]:
                 has_title = True
             elif ph_type in [PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT]:
                 has_body = True
+
+        # Αν το layout έχει και τίτλο και bullets, αυτό είναι το Main Content Layout!
         if has_title and has_body:
             return layout
 
-    return prs.slide_layouts[1]
+    # 2. Fallback αν δεν βρεθεί μέσω placeholders:
+    # Σαρώνει τις υπάρχουσες διαφάνειες εκτός της 1ης (Cover)
+    if len(prs.slides) > 1:
+        for slide in prs.slides[1:]:
+            # Αν η διαφάνεια δεν είναι σκοτεινή/Agenda (έλεγχος αν έχει body)
+            for shape in slide.shapes:
+                if (
+                    shape.is_placeholder
+                    and shape.placeholder_format.type == PP_PLACEHOLDER.BODY
+                ):
+                    return slide.slide_layout
+
+    # 3. Default Fallback
+    if len(prs.slide_layouts) > 1:
+        return prs.slide_layouts[1]
+    return prs.slide_layouts[0]
 
 
 def process_cover_slide(slide, deck_title, deck_subtitle=""):
@@ -205,15 +222,14 @@ def inject_text():
         if len(prs.slides) > 0:
             process_cover_slide(prs.slides[0], deck_title, deck_subtitle)
 
-        # 2. ΕΥΡΕΣΗ ΛΕΥΚΟΥ LAYOUT ΠΕΡΙΕΧΟΜΕΝΟΥ
+        # 2. ΔΥΝΑΜΙΚΗ ΕΥΡΕΣΗ LAYOUT ΠΕΡΙΕΧΟΜΕΝΟΥ (Από τα Master Layouts)
         content_layout = get_best_content_layout(prs)
 
         # 3. ΚΑΘΑΡΙΖΟΥΜΕ/ΔΙΑΓΡΑΦΟΥΜΕ ΟΛΕΣ ΤΙΣ ΠΑΛΙΕΣ ΔΙΑΦΑΝΕΙΕΣ ΜΕΤΑ ΤΟ COVER
-        # (Σβήνουμε και την Agenda και τις υπόλοιπες πράσινες ώστε να χτίσουμε μόνο λευκές)
         while len(prs.slides) > 1:
             delete_slide(prs, 1)
 
-        # 4. ΔΗΜΙΟΥΡΓΟΥΜΕ ΝΕΕΣ ΛΕΥΚΕΣ ΔΙΑΦΑΝΕΙΕΣ ΓΙΑ ΚΑΘΕ SLIDE ΤΟΥ GEMINI
+        # 4. ΔΗΜΙΟΥΡΓΟΥΜΕ ΝΕΕΣ ΔΙΑΦΑΝΕΙΕΣ ΓΙΑ ΚΑΘΕ SLIDE ΤΟΥ GEMINI
         for slide_info in slides_data:
             slide = prs.slides.add_slide(content_layout)
             process_slide_text(
