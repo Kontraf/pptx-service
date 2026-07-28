@@ -11,9 +11,10 @@ CORS(app)
 
 def delete_slide(prs, index):
     """Διαγράφει μια διαφάνεια από το Presentation βάσει του index της."""
-    rId = prs.slides._sldIdLst[index].rId
+    sld_id_lst = prs.slides._sldIdLst
+    rId = sld_id_lst[index].get("rId")
     prs.part.drop_rel(rId)
-    del prs.slides._sldIdLst[index]
+    del sld_id_lst[index]
 
 
 def get_best_content_layout(prs):
@@ -50,11 +51,7 @@ def get_best_content_layout(prs):
 
 
 def process_cover_slide(slide, deck_title, deck_subtitle=""):
-    """🎯 ΕΙΔΙΚΟΣ ΧΕΙΡΙΣΜΟΣ COVER SLIDE:
-
-    Βάζει ΜΟΝΟ τον Τίτλο (και Υπότιτλο αν υπάρχει) και ΣΒΗΝΕΙ ΟΛΑ τα υπόλοιπα
-    κείμενα/bullets.
-    """
+    """Ειδικός χειρισμός Cover Slide: Βάζει μόνο τίτλο & υπότιτλο και καθαρίζει τα υπόλοιπα."""
     title_done = False
 
     for shape in slide.shapes:
@@ -66,7 +63,6 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
         if shape.is_placeholder:
             ph_type = shape.placeholder_format.type
 
-            # Αν είναι Τίτλος (Center Title ή Title)
             if (
                 ph_type in [PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.TITLE]
                 and not title_done
@@ -81,7 +77,6 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
                         p.text = deck_title
                 title_done = True
 
-            # Αν είναι Υπότιτλος
             elif ph_type == PP_PLACEHOLDER.SUBTITLE:
                 if deck_subtitle and len(tf.paragraphs) > 0:
                     p = tf.paragraphs[0]
@@ -92,9 +87,8 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
                     else:
                         p.text = deck_subtitle
                 else:
-                    tf.text = ""  # Καθαρισμός αν δεν υπάρχει υπότιτλος
+                    tf.text = ""
 
-            # Καθαρίζουμε οτιδήποτε άλλο πλαίσιο (Footers, Body, κλπ)
             elif ph_type not in [
                 PP_PLACEHOLDER.FOOTER,
                 PP_PLACEHOLDER.HEADER,
@@ -104,12 +98,11 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
                 tf.text = ""
 
         else:
-            # Αν δεν είναι placeholder αλλά έχει κείμενο (και δεν είναι το πρώτο μεγάλο κουτί τίτλου)
-            if not title_done and shape.top < 4000000:  # Ψηλά στη διαφάνεια
+            if not title_done and shape.top < 4000000:
                 tf.text = deck_title
                 title_done = True
             else:
-                tf.text = ""  # Σβήνουμε οποιοδήποτε άλλο κείμενο!
+                tf.text = ""
 
 
 def process_slide_text(slide, title_text, bullets):
@@ -147,7 +140,7 @@ def process_slide_text(slide, title_text, bullets):
             if not shape.has_text_frame:
                 continue
 
-            if shape.top > 5943600:  # ~6.5 ίντσες (αγνοούμε footers)
+            if shape.top > 5943600:
                 continue
 
             valid_text_shapes.append(shape)
@@ -160,7 +153,6 @@ def process_slide_text(slide, title_text, bullets):
             if not body_shape and len(valid_text_shapes) > 1:
                 body_shape = valid_text_shapes[1]
 
-    # --- ΕΦΑΡΜΟΓΗ ΤΙΤΛΟΥ ---
     if title_shape and title_shape.has_text_frame:
         tf = title_shape.text_frame
         if title_text and len(tf.paragraphs) > 0:
@@ -172,7 +164,6 @@ def process_slide_text(slide, title_text, bullets):
             else:
                 p.text = title_text
 
-    # --- ΕΦΑΡΜΟΓΗ BULLETS ---
     if body_shape and body_shape.has_text_frame and bullets:
         tf = body_shape.text_frame
 
@@ -217,14 +208,13 @@ def inject_text():
 
         content_layout = get_best_content_layout(prs)
 
-        # 1. ΧΕΙΡΙΣΜΟΣ COVER SLIDE (Διαφάνεια 1 - Index 0)
+        # 1. ΧΕΙΡΙΣΜΟΣ COVER SLIDE
         if num_template_slides > 0:
             process_cover_slide(prs.slides[0], deck_title, deck_subtitle)
 
-        # 2. ΕΝΗΜΕΡΩΣΗ ΥΠΟΛΟΙΠΩΝ ΔΙΑΦΑΝΕΙΩΝ ΠΕΡΙΕΧΟΜΕΝΟΥ (Από διαφάνεια 2 και μετά)
+        # 2. ΕΝΗΜΕΡΩΣΗ ΥΠΟΛΟΙΠΩΝ ΔΙΑΦΑΝΕΙΩΝ
         for i in range(1, min(num_template_slides, num_gemini_slides + 1)):
             slide = prs.slides[i]
-            # Παίρνουμε το αντίστοιχο slide από τα δεδομένα του Gemini (i-1)
             slide_info = slides_data[i - 1] if (i - 1) < len(slides_data) else {}
 
             process_slide_text(
@@ -233,13 +223,13 @@ def inject_text():
                 slide_info.get("bullets", []),
             )
 
-        # 3. ΑΝ ΤΟ TEMPLATE ΕΧΕΙ ΠΕΡΙΣΣΟΤΕΡΕΣ ΔΙΑΦΑΝΕΙΕΣ -> ΔΙΑΓΡΑΦΟΥΜΕ ΤΙΣ ΕΠΙΠΛΕΟΝ
-        total_target_slides = len(slides_data) + 1  # 1 Cover + τα slides του Gemini
+        # 3. ΔΙΑΓΡΑΦΗ ΠΕΡΙΣΣΕΥΟΥΜΕΝΩΝ ΔΙΑΦΑΝΕΙΩΝ
+        total_target_slides = len(slides_data) + 1
         if num_template_slides > total_target_slides:
             for i in range(num_template_slides - 1, total_target_slides - 1, -1):
                 delete_slide(prs, i)
 
-        # 4. ΑΝ ΤΟ GEMINI ΕΧΕΙ ΠΕΡΙΣΣΟΤΕΡΕΣ ΔΙΑΦΑΝΕΙΕΣ -> ΔΗΜΙΟΥΡΓΟΥΜΕ ΝΕΕΣ
+        # 4. ΔΗΜΙΟΥΡΓΙΑ ΕΠΙΠΛΕΟΝ ΔΙΑΦΑΝΕΙΩΝ
         elif total_target_slides > num_template_slides:
             for i in range(num_template_slides, total_target_slides):
                 slide = prs.slides.add_slide(content_layout)
