@@ -1,7 +1,5 @@
 import io
 import json
-import logging
-
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from pptx import Presentation
@@ -10,14 +8,12 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 app = Flask(__name__)
 CORS(app)
 
-logging.basicConfig(level=logging.INFO)
 
-
-def clear_slide_content(slide):
-    """Καθαρίζει όλα τα κείμενα από μια διαφάνεια χωρίς να πειράζει το XML layout."""
-    for shape in slide.shapes:
-        if shape.has_text_frame:
-            shape.text_frame.text = ""
+def delete_slide(prs, index):
+    """Διαγράφει μια διαφάνεια από το Presentation βάσει του index της."""
+    rId = prs.slides._sldIdLst[index].rId
+    prs.part.drop_rel(rId)
+    del prs.slides._sldIdLst[index]
 
 
 def get_best_content_layout(prs):
@@ -29,15 +25,9 @@ def get_best_content_layout(prs):
             for shape in slide.shapes:
                 if shape.is_placeholder:
                     ph_type = shape.placeholder_format.type
-                    if ph_type in [
-                        PP_PLACEHOLDER.TITLE,
-                        PP_PLACEHOLDER.CENTER_TITLE,
-                    ]:
+                    if ph_type in [PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE]:
                         has_title = True
-                    elif ph_type in [
-                        PP_PLACEHOLDER.BODY,
-                        PP_PLACEHOLDER.OBJECT,
-                    ]:
+                    elif ph_type in [PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT]:
                         has_body = True
             if has_title and has_body:
                 return slide.slide_layout
@@ -60,7 +50,11 @@ def get_best_content_layout(prs):
 
 
 def process_cover_slide(slide, deck_title, deck_subtitle=""):
-    """Ειδικός χειρισμός Cover Slide: Βάζει μόνο τίτλο & υπότιτλο."""
+    """🎯 ΕΙΔΙΚΟΣ ΧΕΙΡΙΣΜΟΣ COVER SLIDE:
+
+    Βάζει ΜΟΝΟ τον Τίτλο (και Υπότιτλο αν υπάρχει) και ΣΒΗΝΕΙ ΟΛΑ τα υπόλοιπα
+    κείμενα/bullets.
+    """
     title_done = False
 
     for shape in slide.shapes:
@@ -72,6 +66,7 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
         if shape.is_placeholder:
             ph_type = shape.placeholder_format.type
 
+            # Αν είναι Τίτλος (Center Title ή Title)
             if (
                 ph_type in [PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.TITLE]
                 and not title_done
@@ -86,6 +81,7 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
                         p.text = deck_title
                 title_done = True
 
+            # Αν είναι Υπότιτλος
             elif ph_type == PP_PLACEHOLDER.SUBTITLE:
                 if deck_subtitle and len(tf.paragraphs) > 0:
                     p = tf.paragraphs[0]
@@ -96,8 +92,9 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
                     else:
                         p.text = deck_subtitle
                 else:
-                    tf.text = ""
+                    tf.text = ""  # Καθαρισμός αν δεν υπάρχει υπότιτλος
 
+            # Καθαρίζουμε οτιδήποτε άλλο πλαίσιο (Footers, Body, κλπ)
             elif ph_type not in [
                 PP_PLACEHOLDER.FOOTER,
                 PP_PLACEHOLDER.HEADER,
@@ -107,15 +104,16 @@ def process_cover_slide(slide, deck_title, deck_subtitle=""):
                 tf.text = ""
 
         else:
-            if not title_done and shape.top < 4000000:
+            # Αν δεν είναι placeholder αλλά έχει κείμενο (και δεν είναι το πρώτο μεγάλο κουτί τίτλου)
+            if not title_done and shape.top < 4000000:  # Ψηλά στη διαφάνεια
                 tf.text = deck_title
                 title_done = True
             else:
-                tf.text = ""
+                tf.text = ""  # Σβήνουμε οποιοδήποτε άλλο κείμενο!
 
 
 def process_slide_text(slide, title_text, bullets):
-    """Εντοπίζει αυστηρά μόνο τον Τίτλο και το Κύριο Σώμα στις διαφάνειες."""
+    """Εντοπίζει αυστηρά μόνο τον Τίτλο και το Κύριο Σώμα (Body) στις διαφάνειες περιεχομένου."""
     title_shape = None
     body_shape = None
 
@@ -149,7 +147,7 @@ def process_slide_text(slide, title_text, bullets):
             if not shape.has_text_frame:
                 continue
 
-            if shape.top > 5943600:
+            if shape.top > 5943600:  # ~6.5 ίντσες (αγνοούμε footers)
                 continue
 
             valid_text_shapes.append(shape)
@@ -162,6 +160,7 @@ def process_slide_text(slide, title_text, bullets):
             if not body_shape and len(valid_text_shapes) > 1:
                 body_shape = valid_text_shapes[1]
 
+    # --- ΕΦΑΡΜΟΓΗ ΤΙΤΛΟΥ ---
     if title_shape and title_shape.has_text_frame:
         tf = title_shape.text_frame
         if title_text and len(tf.paragraphs) > 0:
@@ -173,6 +172,7 @@ def process_slide_text(slide, title_text, bullets):
             else:
                 p.text = title_text
 
+    # --- ΕΦΑΡΜΟΓΗ BULLETS ---
     if body_shape and body_shape.has_text_frame and bullets:
         tf = body_shape.text_frame
 
@@ -217,13 +217,14 @@ def inject_text():
 
         content_layout = get_best_content_layout(prs)
 
-        # 1. ΧΕΙΡΙΣΜΟΣ COVER SLIDE
+        # 1. ΧΕΙΡΙΣΜΟΣ COVER SLIDE (Διαφάνεια 1 - Index 0)
         if num_template_slides > 0:
             process_cover_slide(prs.slides[0], deck_title, deck_subtitle)
 
-        # 2. ΕΝΗΜΕΡΩΣΗ ΥΠΟΛΟΙΠΩΝ ΔΙΑΦΑΝΕΙΩΝ
+        # 2. ΕΝΗΜΕΡΩΣΗ ΥΠΟΛΟΙΠΩΝ ΔΙΑΦΑΝΕΙΩΝ ΠΕΡΙΕΧΟΜΕΝΟΥ (Από διαφάνεια 2 και μετά)
         for i in range(1, min(num_template_slides, num_gemini_slides + 1)):
             slide = prs.slides[i]
+            # Παίρνουμε το αντίστοιχο slide από τα δεδομένα του Gemini (i-1)
             slide_info = slides_data[i - 1] if (i - 1) < len(slides_data) else {}
 
             process_slide_text(
@@ -232,13 +233,13 @@ def inject_text():
                 slide_info.get("bullets", []),
             )
 
-        # 3. ΑΝ ΠΕΡΙΣΣΕΥΟΥΝ ΔΙΑΦΑΝΕΙΕΣ, ΚΑΘΑΡΙΖΟΥΜΕ ΤΟ ΠΕΡΙΕΧΟΜΕΝΟ ΤΟΥΣ (ΧΩΡΙΣ DELETE)
-        total_target_slides = len(slides_data) + 1
+        # 3. ΑΝ ΤΟ TEMPLATE ΕΧΕΙ ΠΕΡΙΣΣΟΤΕΡΕΣ ΔΙΑΦΑΝΕΙΕΣ -> ΔΙΑΓΡΑΦΟΥΜΕ ΤΙΣ ΕΠΙΠΛΕΟΝ
+        total_target_slides = len(slides_data) + 1  # 1 Cover + τα slides του Gemini
         if num_template_slides > total_target_slides:
-            for i in range(total_target_slides, num_template_slides):
-                clear_slide_content(prs.slides[i])
+            for i in range(num_template_slides - 1, total_target_slides - 1, -1):
+                delete_slide(prs, i)
 
-        # 4. ΔΗΜΙΟΥΡΓΙΑ ΕΠΙΠΛΕΟΝ ΔΙΑΦΑΝΕΙΩΝ
+        # 4. ΑΝ ΤΟ GEMINI ΕΧΕΙ ΠΕΡΙΣΣΟΤΕΡΕΣ ΔΙΑΦΑΝΕΙΕΣ -> ΔΗΜΙΟΥΡΓΟΥΜΕ ΝΕΕΣ
         elif total_target_slides > num_template_slides:
             for i in range(num_template_slides, total_target_slides):
                 slide = prs.slides.add_slide(content_layout)
@@ -260,8 +261,8 @@ def inject_text():
             download_name="presentation_updated.pptx",
         )
 
-    except Exception as e:  # noqa: BLE001
-        logging.error("Error processing PPTX: %s", e)
+    except Exception as e:
+        print(f"Error processing PPTX: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
