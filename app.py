@@ -1,12 +1,33 @@
 import io
 import json
+import logging
+import os
+
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from pptx import Presentation
 from pptx.enum.shapes import PP_PLACEHOLDER
+from werkzeug.exceptions import HTTPException
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+
+# Μέγιστο μέγεθος αιτήματος (το PowerPoint template). Μεγαλύτερα αιτήματα απορρίπτονται με 413.
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "20")) * 1024 * 1024
+
+# Μόνο αυτά τα origins μπορούν να καλούν το service από browser.
+# Μπορείς να τα αλλάξεις με τη μεταβλητή περιβάλλοντος ALLOWED_ORIGINS (χωρισμένα με κόμμα).
+DEFAULT_ORIGINS = "https://presentation-maker-xi.vercel.app,http://localhost:3000"
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGINS", DEFAULT_ORIGINS).split(",")
+    if o.strip()
+]
+CORS(app, origins=ALLOWED_ORIGINS)
+
+MAX_SLIDES = 60
+MAX_BULLETS_PER_SLIDE = 30
 
 
 def delete_slide(prs, index):
@@ -210,13 +231,28 @@ def inject_text():
             return jsonify({"error": "Missing template file or data JSON"}), 400
 
         template_file = request.files["template"]
-        data_json = json.loads(request.form["data"])
+        try:
+            data_json = json.loads(request.form["data"])
+        except json.JSONDecodeError:
+            return jsonify({"error": "The data field is not valid JSON"}), 400
 
-        deck_title = data_json.get("title", "")
-        deck_subtitle = data_json.get("subtitle", "")
+        if not isinstance(data_json, dict):
+            return jsonify({"error": "The data field must be a JSON object"}), 400
+
+        deck_title = str(data_json.get("title", ""))
+        deck_subtitle = str(data_json.get("subtitle", ""))
         slides_data = data_json.get("slides", [])
 
-        prs = Presentation(template_file)
+        if not isinstance(slides_data, list) or len(slides_data) > MAX_SLIDES:
+            return (
+                jsonify({"error": f"slides must be a list of at most {MAX_SLIDES} items"}),
+                400,
+            )
+
+        try:
+            prs = Presentation(template_file)
+        except Exception:
+            return jsonify({"error": "The template is not a valid .pptx file"}), 400
 
         # 1. ΧΕΙΡΙΣΜΟΣ COVER SLIDE (Διαφάνεια 1 - Index 0)
         if len(prs.slides) > 0:
@@ -231,12 +267,14 @@ def inject_text():
 
         # 4. ΔΗΜΙΟΥΡΓΟΥΜΕ ΝΕΕΣ ΔΙΑΦΑΝΕΙΕΣ ΓΙΑ ΚΑΘΕ SLIDE ΤΟΥ GEMINI
         for slide_info in slides_data:
+            if not isinstance(slide_info, dict):
+                continue
+            bullets = slide_info.get("bullets", [])
+            if not isinstance(bullets, list):
+                bullets = []
+            bullets = [str(b) for b in bullets[:MAX_BULLETS_PER_SLIDE]]
             slide = prs.slides.add_slide(content_layout)
-            process_slide_text(
-                slide,
-                slide_info.get("title", ""),
-                slide_info.get("bullets", []),
-            )
+            process_slide_text(slide, str(slide_info.get("title", "")), bullets)
 
         output = io.BytesIO()
         prs.save(output)
@@ -249,9 +287,19 @@ def inject_text():
             download_name="presentation_updated.pptx",
         )
 
-    except Exception as e:
-        print(f"Error processing PPTX: {e!s}")
-        return jsonify({"error": str(e)}), 500
+    except HTTPException:
+        # π.χ. 413 για πολύ μεγάλο αρχείο: τα χειρίζεται ο error handler
+        raise
+    except Exception:
+        # Το πλήρες σφάλμα μένει στα logs. Ο client παίρνει γενικό μήνυμα.
+        logger.exception("Error processing PPTX")
+        return jsonify({"error": "Could not process the presentation"}), 500
+
+
+@app.errorhandler(413)
+def too_large(_error):
+    limit_mb = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    return jsonify({"error": f"File is too large (limit is {limit_mb} MB)"}), 413
 
 
 if __name__ == "__main__":
